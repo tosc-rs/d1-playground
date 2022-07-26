@@ -1,9 +1,7 @@
-use d1_pac::TIMER;
 pub use d1_pac::timer::tmr_ctrl::{
-    TMR_CLK_SRC_A as TimerSource,
-    TMR_CLK_PRES_A as TimerPrescaler,
-    TMR_MODE_A as TimerMode,
+    TMR_CLK_PRES_A as TimerPrescaler, TMR_CLK_SRC_A as TimerSource, TMR_MODE_A as TimerMode,
 };
+use d1_pac::TIMER;
 
 pub struct Timers {
     pub timer0: Timer0,
@@ -11,7 +9,13 @@ pub struct Timers {
 }
 
 mod sealed {
-    use d1_pac::{generic::Reg, timer::{tmr_ctrl::TMR_CTRL_SPEC, tmr_intv_value::TMR_INTV_VALUE_SPEC, tmr_cur_value::TMR_CUR_VALUE_SPEC}};
+    use d1_pac::{
+        generic::Reg,
+        timer::{
+            tmr_ctrl::TMR_CTRL_SPEC, tmr_cur_value::TMR_CUR_VALUE_SPEC,
+            tmr_intv_value::TMR_INTV_VALUE_SPEC,
+        },
+    };
 
     use super::*;
 
@@ -109,8 +113,8 @@ mod sealed {
         }
     }
 
-    impl Timer for Timer0 { }
-    impl Timer for Timer1 { }
+    impl Timer for Timer0 {}
+    impl Timer for Timer1 {}
 }
 
 pub struct Timer0 {
@@ -178,9 +182,7 @@ pub trait Timer: sealed::TimerSealed {
 }
 
 impl Timers {
-    pub fn new(
-        periph: TIMER,
-    ) -> Self {
+    pub fn new(periph: TIMER) -> Self {
         // 1. Configure the timer parameters clock source, prescale factor, and timing mode by writing **TMRn_CTRL_REG**. There is no sequence requirement of configuring the parameters.
         // 2. Write the interval value.
         //     * Write TMRn_INTV_VALUE_REG to configure the interval value for the timer.
