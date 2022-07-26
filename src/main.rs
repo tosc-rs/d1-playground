@@ -6,6 +6,7 @@ use panic_halt as _;
 mod de;
 
 use d1_playground::timer::{Timers, Timer, TimerSource, TimerPrescaler, TimerMode};
+use riscv::asm::delay;
 
 struct Uart(d1_pac::UART0);
 static mut PRINTER: Option<Uart> = None;
@@ -82,20 +83,40 @@ fn main() -> ! {
     timer0.set_mode(TimerMode::SINGLE_COUNTING);
     timer1.set_mode(TimerMode::SINGLE_COUNTING);
 
+    let _ = timer0.get_and_clear_interrupt();
+    let _ = timer1.get_and_clear_interrupt();
+
+    // yolo
+    timer0.set_interrupt_en(true);
+
     // Blink LED
-    loop { unsafe {
-        println!("Hello, world!");
+    loop {
+        println!("-------------------------");
+        if timer0.get_and_clear_interrupt() {
+            println!("[PRE]: T0 INT SET");
+        } else {
+            println!("[PRE]: T0 INT CLR");
+        }
+
+        if timer1.get_and_clear_interrupt() {
+            println!("[PRE]: T1 INT SET");
+        } else {
+            println!("[PRE]: T1 INT CLR");
+        }
+        println!("-------------------------");
 
         // Start both counters for 3M ticks: that's 1s for timer 0
-        // and 4s for timer 1.
+        // and 4s for timer 1, for a 25% duty cycle
         timer0.start_counter(3_000_000);
         timer1.start_counter(3_000_000);
-        gpio.pc_dat.write(|w| w.bits(2));
+        gpio.pc_dat.write(|w| unsafe { w.bits(2) });
 
-        while timer0.current_value() != 0 { }
+        while !timer0.get_and_clear_interrupt() { }
+        println!("T0 DONE");
 
-        gpio.pc_dat.write(|w| w.bits(0));
+        gpio.pc_dat.write(|w| unsafe { w.bits(0) });
 
-        while timer1.current_value() != 0 { }
-    }}
+        while !timer1.get_and_clear_interrupt() { }
+        println!("T1 DONE");
+    }
 }

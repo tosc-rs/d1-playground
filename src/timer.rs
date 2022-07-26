@@ -19,6 +19,8 @@ mod sealed {
         fn ctrl(&self) -> &Reg<TMR_CTRL_SPEC>;
         fn interval(&self) -> &Reg<TMR_INTV_VALUE_SPEC>;
         fn value(&self) -> &Reg<TMR_CUR_VALUE_SPEC>;
+        fn set_interrupt_en(&self, enabled: bool);
+        fn get_and_clear_interrupt(&self) -> bool;
     }
 
     impl TimerSealed for Timer0 {
@@ -39,6 +41,29 @@ mod sealed {
             let timer = unsafe { &*TIMER::PTR };
             &timer.tmr0_cur_value
         }
+
+        #[inline(always)]
+        fn get_and_clear_interrupt(&self) -> bool {
+            let timer = unsafe { &*TIMER::PTR };
+            let mut active = false;
+            timer.tmr_irq_sta.modify(|r, w| {
+                if r.tmr0_irq_pend().bit_is_set() {
+                    w.tmr0_irq_pend().set_bit();
+                    active = true;
+                }
+                w
+            });
+            active
+        }
+
+        #[inline(always)]
+        fn set_interrupt_en(&self, enabled: bool) {
+            let timer = unsafe { &*TIMER::PTR };
+            timer.tmr_irq_en.modify(|_r, w| {
+                w.tmr0_irq_en().bit(enabled);
+                w
+            });
+        }
     }
 
     impl TimerSealed for Timer1 {
@@ -58,6 +83,29 @@ mod sealed {
         fn value(&self) -> &Reg<TMR_CUR_VALUE_SPEC> {
             let timer = unsafe { &*TIMER::PTR };
             &timer.tmr1_cur_value
+        }
+
+        #[inline(always)]
+        fn get_and_clear_interrupt(&self) -> bool {
+            let timer = unsafe { &*TIMER::PTR };
+            let mut active = false;
+            timer.tmr_irq_sta.modify(|r, w| {
+                if r.tmr1_irq_pend().bit_is_set() {
+                    w.tmr1_irq_pend().set_bit();
+                    active = true;
+                }
+                w
+            });
+            active
+        }
+
+        #[inline(always)]
+        fn set_interrupt_en(&self, enabled: bool) {
+            let timer = unsafe { &*TIMER::PTR };
+            timer.tmr_irq_en.modify(|_r, w| {
+                w.tmr1_irq_en().bit(enabled);
+                w
+            });
         }
     }
 
@@ -117,11 +165,21 @@ pub trait Timer: sealed::TimerSealed {
     fn current_value(&self) -> u32 {
         self.value().read().bits()
     }
+
+    #[inline]
+    fn get_and_clear_interrupt(&self) -> bool {
+        sealed::TimerSealed::get_and_clear_interrupt(self)
+    }
+
+    #[inline]
+    fn set_interrupt_en(&self, enabled: bool) {
+        sealed::TimerSealed::set_interrupt_en(self, enabled)
+    }
 }
 
 impl Timers {
     pub fn new(
-        _periph: TIMER,
+        periph: TIMER,
     ) -> Self {
         // 1. Configure the timer parameters clock source, prescale factor, and timing mode by writing **TMRn_CTRL_REG**. There is no sequence requirement of configuring the parameters.
         // 2. Write the interval value.
@@ -129,6 +187,12 @@ impl Timers {
         //     * Write bit[1] of TMRn_CTRL_REG to load the interval value to the timer. The value of the bit will be cleared automatically after loading the interval value.
         // 3. Write bit[0] of TMRn_CTRL_REG to start the timer. To get the current value of the timer, read
         // TMRn_CUR_VALUE_REG.
+        periph.tmr_irq_en.write(|w| {
+            w.tmr0_irq_en().clear_bit();
+            w.tmr1_irq_en().clear_bit();
+            w
+        });
+
         Self {
             timer0: Timer0 { _x: () },
             timer1: Timer1 { _x: () },
