@@ -88,6 +88,17 @@ fn main() -> ! {
 
     // yolo
     timer0.set_interrupt_en(true);
+    let plic = &p.PLIC;
+    let clint = &p.CLINT;
+    plic.prio[75].write(|w| {
+        w.priority().p1()
+    });
+    plic.mie[2].write(|w| unsafe {
+        w.bits(1 << 11)
+    });
+    unsafe { riscv::interrupt::enable(); }
+    let active = (plic.ip[2].read().bits() & (1 << 11)) != 0;
+    assert!(!active);
 
     // Blink LED
     loop {
@@ -111,12 +122,25 @@ fn main() -> ! {
         timer1.start_counter(3_000_000);
         gpio.pc_dat.write(|w| unsafe { w.bits(2) });
 
-        while !timer0.get_and_clear_interrupt() { }
-        println!("T0 DONE");
+        loop {
+            let active = (plic.ip[2].read().bits() & (1 << 11)) != 0;
+            if active {
+                println!("T0 DONE");
+                break
+            }
+        }
+        // while !timer0.get_and_clear_interrupt() { }
+        // println!("T0 DONE");
 
         gpio.pc_dat.write(|w| unsafe { w.bits(0) });
 
         while !timer1.get_and_clear_interrupt() { }
         println!("T1 DONE");
     }
+}
+
+#[export_name = "MachineExternal"]
+fn im_an_interrupt() {
+    println!("I'M AN INTERRUPT");
+    panic!()
 }
