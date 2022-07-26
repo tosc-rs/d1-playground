@@ -8,7 +8,7 @@ use panic_halt as _;
 
 use d1_playground::timer::{Timer, TimerMode, TimerPrescaler, TimerSource, Timers};
 
-static HOUND: &[u8] = include_bytes!("../hound.txt");
+static HOUND: &str = include_str!("../hound.txt");
 
 struct Uart(d1_pac::UART0);
 static mut PRINTER: Option<Uart> = None;
@@ -145,7 +145,7 @@ fn main() -> ! {
     let thr_addr = unsafe { &*UART0::PTR }.thr() as *const _ as usize as u64;
 
 
-    for chunk in HOUND.chunks(256) {
+    for chunk in HOUND.lines() {
 
         descriptor.set_source(chunk.as_ptr() as usize as u64);
         descriptor.set_dest(thr_addr);
@@ -153,15 +153,17 @@ fn main() -> ! {
 
         // I think? DMAC_CFG_REGN
         descriptor.configuration = 0;
-        descriptor.configuration |= (0b0 << 30);  // BMODE_SEL: Normal
-        descriptor.configuration |= (0b00 << 25); // DEST_WIDTH: 8-bit
-        descriptor.configuration |= (0b1 << 24);  // DMA_ADDR_MODE: Dest IO Mode
-        descriptor.configuration |= (0b00 << 22); // Dest block size: 1
-        descriptor.configuration |= (0b001110 << 16); // !!! Dest DRQ Type - UART0
-        descriptor.configuration |= (0b00 << 9); // Source width 8 bit
-        descriptor.configuration |= (0b0 << 8); // Source Linear Mode
-        descriptor.configuration |= (0b00 << 6); // Source block size 1
-        descriptor.configuration |= (0b000001 << 0); // Source DRQ type - DRAM
+        descriptor.configuration |= 0b0 << 30;  // BMODE_SEL: Normal
+        descriptor.configuration |= 0b00 << 25; // DEST_WIDTH: 8-bit
+        descriptor.configuration |= 0b1 << 24;  // DMA_ADDR_MODE: Dest IO Mode
+        descriptor.configuration |= 0b00 << 22; // Dest block size: 1
+        descriptor.configuration |= 0b001110 << 16; // !!! Dest DRQ Type - UART0
+        descriptor.configuration |= 0b00 << 9; // Source width 8 bit
+        descriptor.configuration |= 0b0 << 8; // Source Linear Mode
+        descriptor.configuration |= 0b00 << 6; // Source block size 1
+        descriptor.configuration |= 0b000001 << 0; // Source DRQ type - DRAM
+
+        descriptor.end_link();
 
         compiler_fence(Ordering::SeqCst); //////
 
@@ -174,9 +176,10 @@ fn main() -> ! {
 
         compiler_fence(Ordering::SeqCst); //////
 
-        timer0.start_counter(3_000_000);
+        timer0.start_counter(1_500_000);
         unsafe { riscv::asm::wfi() };
-        println!("T0 DONE");
+
+        println!("");
         dmac.dmac_en_reg0.write(|w| w.dma_en().disabled());
     }
     panic!();
@@ -188,7 +191,7 @@ fn im_an_interrupt() {
     let timer = unsafe { &*TIMER::PTR };
 
     let claim = plic.mclaim.read().mclaim();
-    println!("INTERRUPT! claim: {}", claim.bits());
+    // println!("INTERRUPT! claim: {}", claim.bits());
 
     match claim.bits() {
         75 => {
