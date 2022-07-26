@@ -5,6 +5,8 @@ use panic_halt as _;
 
 mod de;
 
+use d1_playground::timer::{Timers, Timer, TimerSource, TimerPrescaler, TimerMode};
+
 struct Uart(d1_pac::UART0);
 static mut PRINTER: Option<Uart> = None;
 impl core::fmt::Write for Uart {
@@ -68,16 +70,32 @@ fn main() -> ! {
     uart0.halt.write(|w| w.halt_tx().disabled());
     unsafe { PRINTER = Some(Uart(uart0)) };
 
+    // Set up timers
+    let Timers { mut timer0, mut timer1, .. } = Timers::new(p.TIMER);
+
+    timer0.set_source(TimerSource::OSC24_M);
+    timer1.set_source(TimerSource::OSC24_M);
+
+    timer0.set_prescaler(TimerPrescaler::P8);  // 24M / 8:  3.00M ticks/s
+    timer1.set_prescaler(TimerPrescaler::P32); // 24M / 32: 0.75M ticks/s
+
+    timer0.set_mode(TimerMode::SINGLE_COUNTING);
+    timer1.set_mode(TimerMode::SINGLE_COUNTING);
+
     // Blink LED
     loop { unsafe {
         println!("Hello, world!");
 
+        // Start both counters for 3M ticks: that's 1s for timer 0
+        // and 4s for timer 1.
+        timer0.start_counter(3_000_000);
+        timer1.start_counter(3_000_000);
         gpio.pc_dat.write(|w| w.bits(2));
 
-        riscv::asm::delay(100_000_000);
+        while timer0.current_value() != 0 { }
 
         gpio.pc_dat.write(|w| w.bits(0));
 
-        riscv::asm::delay(100_000_000);
+        while timer1.current_value() != 0 { }
     }}
 }
