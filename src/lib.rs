@@ -3,3 +3,4 @@
 pub mod plic;
 pub mod timer;
 pub mod de;
+pub mod dmac;
