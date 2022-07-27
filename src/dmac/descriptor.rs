@@ -1,3 +1,4 @@
+#[derive(Clone)]
 #[repr(C, align(4))]
 pub struct Descriptor {
     configuration: u32,

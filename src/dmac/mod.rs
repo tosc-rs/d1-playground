@@ -4,7 +4,7 @@ use core::{
 };
 
 use d1_pac::{
-    dmac::{dmac_desc_addr_reg::DMAC_DESC_ADDR_REG_SPEC, dmac_en_reg::DMAC_EN_REG_SPEC},
+    dmac::{dmac_desc_addr_reg::DMAC_DESC_ADDR_REG_SPEC, dmac_en_reg::DMAC_EN_REG_SPEC, dmac_mode_reg::DMAC_MODE_REG_SPEC},
     generic::Reg,
     CCU, DMAC,
 };
@@ -96,6 +96,43 @@ impl Channel {
         }
     }
 
+    pub unsafe fn mode_reg(&self) -> &Reg<DMAC_MODE_REG_SPEC> {
+        let dmac = &*DMAC::PTR;
+        match self.idx {
+            0 => &dmac.dmac_mode_reg0,
+            1 => &dmac.dmac_mode_reg1,
+            2 => &dmac.dmac_mode_reg2,
+            3 => &dmac.dmac_mode_reg3,
+            4 => &dmac.dmac_mode_reg4,
+            5 => &dmac.dmac_mode_reg5,
+            6 => &dmac.dmac_mode_reg6,
+            7 => &dmac.dmac_mode_reg7,
+            8 => &dmac.dmac_mode_reg8,
+            9 => &dmac.dmac_mode_reg9,
+            10 => &dmac.dmac_mode_reg10,
+            11 => &dmac.dmac_mode_reg11,
+            12 => &dmac.dmac_mode_reg12,
+            13 => &dmac.dmac_mode_reg13,
+            14 => &dmac.dmac_mode_reg14,
+            15 => &dmac.dmac_mode_reg15,
+            _ => panic!(),
+        }
+    }
+
+    pub unsafe fn set_channel_modes(&mut self, src: ChannelMode, dst: ChannelMode) {
+        self.mode_reg().write(|w| {
+            match src {
+                ChannelMode::Wait => w.dma_src_mode().waiting(),
+                ChannelMode::Handshake => w.dma_src_mode().handshake(),
+            };
+            match dst {
+                ChannelMode::Wait => w.dma_dst_mode().waiting(),
+                ChannelMode::Handshake => w.dma_dst_mode().handshake(),
+            };
+            w
+        })
+    }
+
     pub unsafe fn start_descriptor(&mut self, desc: NonNull<Descriptor>) {
         // TODO: Check if channel is idle?
 
@@ -118,4 +155,9 @@ impl Channel {
 
         fence(Ordering::SeqCst); //////
     }
+}
+
+pub enum ChannelMode {
+    Wait,
+    Handshake,
 }

@@ -1,14 +1,15 @@
 #![no_std]
 #![no_main]
 
+use core::cell::UnsafeCell;
 use core::ptr::NonNull;
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{compiler_fence, Ordering, fence};
 
 use d1_pac::{Interrupt, TIMER, UART0};
 use d1_playground::dmac::descriptor::{
-    AddressMode, BModeSel, BlockSize, DataWidth, DescriptorConfig, DestDrqType, SrcDrqType,
+    AddressMode, BModeSel, BlockSize, DataWidth, DescriptorConfig, DestDrqType, SrcDrqType, Descriptor,
 };
-use d1_playground::dmac::Dmac;
+use d1_playground::dmac::{Dmac, ChannelMode};
 use panic_halt as _;
 
 use d1_playground::plic::{Plic, Priority};
@@ -20,11 +21,20 @@ struct Uart(d1_pac::UART0);
 static mut PRINTER: Option<Uart> = None;
 impl core::fmt::Write for Uart {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        while self.0.usr.read().tfnf().bit_is_clear() {}
         for byte in s.as_bytes() {
             self.0.thr().write(|w| unsafe { w.thr().bits(*byte) });
             while self.0.usr.read().tfnf().bit_is_clear() {}
         }
         Ok(())
+    }
+}
+fn print_raw(data: &[u8]) {
+    let uart = unsafe { PRINTER.as_mut().unwrap() };
+    while uart.0.usr.read().tfnf().bit_is_clear() {}
+    for byte in data {
+        uart.0.thr().write(|w| unsafe { w.thr().bits(*byte) });
+        while uart.0.usr.read().tfnf().bit_is_clear() {}
     }
 }
 pub fn _print(args: core::fmt::Arguments) {
@@ -85,7 +95,8 @@ fn main() -> ! {
     // TXMT INT Trigger: FIFO Empty
     // DMA Mode 0 - (???)
     // FIFOs Enabled
-    uart0.fcr().write(|w| w.fifoe().set_bit());
+    uart0.hsk.write(|w| w.hsk().handshake());
+    uart0.fcr().write(|w| w.fifoe().set_bit().dmam().mode_1().rt().quarter_full());
 
     // TX Halted
     // Also has some DMA relevant things? Not set currently
@@ -103,6 +114,7 @@ fn main() -> ! {
 
     // Re-enable sending
     uart0.halt.write(|w| w.halt_tx().disabled());
+
     unsafe { PRINTER = Some(Uart(uart0)) };
 
     // Set up timers
@@ -140,9 +152,55 @@ fn main() -> ! {
         plic.unmask(Interrupt::TIMER1);
     }
 
+    let data_buf = UnsafeCell::new([0u8; 16]);
+
     let thr_addr = unsafe { &*UART0::PTR }.thr() as *const _ as *mut ();
+    let rhr_addr = unsafe { &*UART0::PTR }.rbr() as *const _ as *const ();
+
+    let rx_desc_base: Descriptor = DescriptorConfig {
+        source: rhr_addr,
+        destination: data_buf.get().cast(),
+        byte_counter: 16,
+        link: None,
+        wait_clock_cycles: 0,
+        bmode: BModeSel::Normal,
+        dest_width: DataWidth::Bit8,
+        dest_addr_mode: AddressMode::LinearMode,
+        dest_block_size: BlockSize::Byte1,
+        dest_drq_type: DestDrqType::Dram,
+        src_data_width: DataWidth::Bit8,
+        src_addr_mode: AddressMode::IoMode,
+        src_block_size: BlockSize::Byte1,
+        src_drq_type: SrcDrqType::Uart0Rx,
+    }.try_into().unwrap();
+
+    let mut rx_desc = None;
 
     for chunk in HOUND.lines() {
+        if rx_desc.is_some() {
+            // TODO: How to tell of DMA channel is done?
+            if unsafe { dmac.channels[1].en_reg() }.read().dma_en().bit_is_clear() {
+                println!("USER INPUT: --------------");
+                let _ = rx_desc.take();
+                print_raw(unsafe {
+                    fence(Ordering::SeqCst);
+                    core::slice::from_raw_parts(
+                        data_buf.get().cast(),
+                        16,
+                    )
+                });
+                println!("\r\n--------------------------");
+            }
+        }
+
+        if rx_desc.is_none() {
+            let desc = rx_desc.insert(rx_desc_base.clone());
+            unsafe {
+                dmac.channels[1].set_channel_modes(ChannelMode::Handshake, ChannelMode::Wait);
+                dmac.channels[1].start_descriptor(NonNull::from(desc));
+            }
+        }
+
         let d_cfg = DescriptorConfig {
             source: chunk.as_ptr().cast(),
             destination: thr_addr,
@@ -161,10 +219,9 @@ fn main() -> ! {
         };
         let descriptor = d_cfg.try_into().unwrap();
         unsafe {
+            dmac.channels[0].set_channel_modes(ChannelMode::Wait, ChannelMode::Handshake);
             dmac.channels[0].start_descriptor(NonNull::from(&descriptor));
         }
-
-        compiler_fence(Ordering::SeqCst); //////
 
         timer0.start_counter(1_500_000);
         unsafe { riscv::asm::wfi() };
