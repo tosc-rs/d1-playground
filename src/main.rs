@@ -221,40 +221,6 @@ fn im_an_interrupt() {
     plic.complete(claim);
 }
 
-#[repr(C, align(4))]
-// This gets written to DMAC_DESC_ADDR_REGN in a funky way
-pub struct Descriptor {
-    configuration: u32,
-    source_address: u32,
-    destination_address: u32,
-    byte_counter: u32,
-    parameter: u32,
-    link: u32,
-}
-
-impl Descriptor {
-    fn set_source(&mut self, source: u64) {
-        assert!(source < (1 << 34));
-        self.source_address = source as u32;
-        //                  332222222222 11 11 11111100 00000000
-        //                  109876543210 98 76 54321098 76543210
-        self.parameter &= 0b111111111111_11_00_11111111_11111111;
-        self.parameter |= (((source >> 32) & 0b11) << 16) as u32;
-    }
-
-    fn set_dest(&mut self, dest: u64) {
-        assert!(dest < (1 << 34));
-        self.destination_address = dest as u32;
-        //                  332222222222 11 11 11111100 00000000
-        //                  109876543210 98 76 54321098 76543210
-        self.parameter &= 0b111111111111_00_11_11111111_11111111;
-        self.parameter |= (((dest >> 32) & 0b11) << 18) as u32;
-    }
-
-    fn end_link(&mut self) {
-        self.link = 0xFFFF_F800;
-    }
-}
 
 // Main config register:
 // DMAC_CFG_REGN
