@@ -3,9 +3,10 @@
 
 use core::sync::atomic::{compiler_fence, Ordering};
 
-use d1_pac::{PLIC, TIMER, UART0};
+use d1_pac::{Interrupt, TIMER, UART0};
 use panic_halt as _;
 
+use d1_playground::plic::{Plic, Priority};
 use d1_playground::timer::{Timer, TimerMode, TimerPrescaler, TimerSource, Timers};
 
 static HOUND: &str = include_str!("../hound.txt");
@@ -124,14 +125,16 @@ fn main() -> ! {
         riscv::register::mie::set_mext();
     }
 
-    // yolo
+    // Set up interrupts
     timer0.set_interrupt_en(true);
     timer1.set_interrupt_en(true);
-    let plic = &p.PLIC;
-
-    plic.prio[75].write(|w| w.priority().p1());
-    plic.prio[76].write(|w| w.priority().p1());
-    plic.mie[2].write(|w| unsafe { w.bits((1 << 11) | (1 << 12)) });
+    let plic = Plic::new(p.PLIC);
+    unsafe {
+        plic.set_priority(Interrupt::TIMER0, Priority::P1);
+        plic.set_priority(Interrupt::TIMER1, Priority::P1);
+        plic.unmask(Interrupt::TIMER0);
+        plic.unmask(Interrupt::TIMER1);
+    }
 
     let mut descriptor = Descriptor {
         configuration: 0,
@@ -187,21 +190,21 @@ fn main() -> ! {
 
 #[export_name = "MachineExternal"]
 fn im_an_interrupt() {
-    let plic = unsafe { &*PLIC::PTR };
+    let plic = unsafe { Plic::summon() };
     let timer = unsafe { &*TIMER::PTR };
 
-    let claim = plic.mclaim.read().mclaim();
-    // println!("INTERRUPT! claim: {}", claim.bits());
+    let claim = plic.claim();
+    // println!("claim: {}", claim.bits());
 
-    match claim.bits() {
-        75 => {
+    match claim {
+        Interrupt::TIMER0 => {
             timer
                 .tmr_irq_sta
                 .modify(|_r, w| w.tmr0_irq_pend().set_bit());
             // Wait for the interrupt to clear to avoid repeat interrupts
             while timer.tmr_irq_sta.read().tmr0_irq_pend().bit_is_set() {}
         }
-        76 => {
+        Interrupt::TIMER1 => {
             timer
                 .tmr_irq_sta
                 .modify(|_r, w| w.tmr1_irq_pend().set_bit());
@@ -209,13 +212,13 @@ fn im_an_interrupt() {
             while timer.tmr_irq_sta.read().tmr1_irq_pend().bit_is_set() {}
         }
         x => {
-            println!("Unexpected claim: {}", x);
+            println!("Unexpected claim: {:?}", x);
             panic!();
         }
     }
 
     // Release claim
-    plic.mclaim.write(|w| w.mclaim().variant(claim.bits()));
+    plic.complete(claim);
 }
 
 #[repr(C, align(4))]
