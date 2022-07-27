@@ -1,9 +1,14 @@
 #![no_std]
 #![no_main]
 
+use core::ptr::NonNull;
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use d1_pac::{Interrupt, TIMER, UART0};
+use d1_playground::dmac::descriptor::{
+    AddressMode, BModeSel, BlockSize, DataWidth, DescriptorConfig, DestDrqType, SrcDrqType,
+};
+use d1_playground::dmac::Dmac;
 use panic_halt as _;
 
 use d1_playground::plic::{Plic, Priority};
@@ -44,16 +49,15 @@ macro_rules! println {
 
 #[riscv_rt::entry]
 fn main() -> ! {
-    let p = d1_pac::Peripherals::take().unwrap();
+    let mut p = d1_pac::Peripherals::take().unwrap();
 
     // Enable UART0 clock.
-    let ccu = &p.CCU;
+    let ccu = &mut p.CCU;
     ccu.uart_bgr
         .write(|w| w.uart0_gating().pass().uart0_rst().deassert());
 
     // DMAC enable
-    let dmac = &p.DMAC;
-    ccu.dma_bgr.write(|w| w.gating().pass().rst().deassert());
+    let mut dmac = Dmac::new(p.DMAC, ccu);
 
     // Set PC1 LED to output.
     let gpio = &p.GPIO;
@@ -136,46 +140,29 @@ fn main() -> ! {
         plic.unmask(Interrupt::TIMER1);
     }
 
-    let mut descriptor = Descriptor {
-        configuration: 0,
-        source_address: 0,
-        destination_address: 0,
-        byte_counter: 0,
-        parameter: 0,
-        link: 0
-    };
-    let desc_addr: *mut u8 = &mut descriptor as *mut Descriptor as *mut u8;
-    let thr_addr = unsafe { &*UART0::PTR }.thr() as *const _ as usize as u64;
-
+    let thr_addr = unsafe { &*UART0::PTR }.thr() as *const _ as *mut ();
 
     for chunk in HOUND.lines() {
-
-        descriptor.set_source(chunk.as_ptr() as usize as u64);
-        descriptor.set_dest(thr_addr);
-        descriptor.byte_counter = chunk.len() as u32;
-
-        // I think? DMAC_CFG_REGN
-        descriptor.configuration = 0;
-        descriptor.configuration |= 0b0 << 30;  // BMODE_SEL: Normal
-        descriptor.configuration |= 0b00 << 25; // DEST_WIDTH: 8-bit
-        descriptor.configuration |= 0b1 << 24;  // DMA_ADDR_MODE: Dest IO Mode
-        descriptor.configuration |= 0b00 << 22; // Dest block size: 1
-        descriptor.configuration |= 0b001110 << 16; // !!! Dest DRQ Type - UART0
-        descriptor.configuration |= 0b00 << 9; // Source width 8 bit
-        descriptor.configuration |= 0b0 << 8; // Source Linear Mode
-        descriptor.configuration |= 0b00 << 6; // Source block size 1
-        descriptor.configuration |= 0b000001 << 0; // Source DRQ type - DRAM
-
-        descriptor.end_link();
-
-        compiler_fence(Ordering::SeqCst); //////
-
-        dmac.dmac_desc_addr_reg0.write(|w| {
-            w.dma_desc_addr().variant((desc_addr as usize >> 2) as u32);
-            w.dma_desc_high_addr().variant(((desc_addr as usize >> 32) as u8) & 0b11);
-            w
-        });
-        dmac.dmac_en_reg0.write(|w| w.dma_en().enabled());
+        let d_cfg = DescriptorConfig {
+            source: chunk.as_ptr().cast(),
+            destination: thr_addr,
+            byte_counter: chunk.len(),
+            link: None,
+            wait_clock_cycles: 0,
+            bmode: BModeSel::Normal,
+            dest_width: DataWidth::Bit8,
+            dest_addr_mode: AddressMode::IoMode,
+            dest_block_size: BlockSize::Byte1,
+            dest_drq_type: DestDrqType::Uart0Tx,
+            src_data_width: DataWidth::Bit8,
+            src_addr_mode: AddressMode::LinearMode,
+            src_block_size: BlockSize::Byte1,
+            src_drq_type: SrcDrqType::Dram,
+        };
+        let descriptor = d_cfg.try_into().unwrap();
+        unsafe {
+            dmac.channels[0].start_descriptor(NonNull::from(&descriptor));
+        }
 
         compiler_fence(Ordering::SeqCst); //////
 
@@ -183,7 +170,10 @@ fn main() -> ! {
         unsafe { riscv::asm::wfi() };
 
         println!("");
-        dmac.dmac_en_reg0.write(|w| w.dma_en().disabled());
+
+        unsafe {
+            dmac.channels[0].stop_dma();
+        }
     }
     panic!();
 }
@@ -220,7 +210,6 @@ fn im_an_interrupt() {
     // Release claim
     plic.complete(claim);
 }
-
 
 // Main config register:
 // DMAC_CFG_REGN

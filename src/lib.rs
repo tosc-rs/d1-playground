@@ -1,6 +1,6 @@
 #![no_std]
 
-pub mod plic;
-pub mod timer;
 pub mod de;
 pub mod dmac;
+pub mod plic;
+pub mod timer;
