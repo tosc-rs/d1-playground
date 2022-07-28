@@ -95,9 +95,18 @@ fn main() -> ! {
     // TXMT INT Trigger: FIFO Empty
     // DMA Mode 0 - (???)
     // FIFOs Enabled
-    uart0.hsk.write(|w| w.hsk().handshake());
-    uart0.dma_req_en.modify(|_r, w| w.timeout_enable().set_bit());
-    uart0.fcr().write(|w| w.fifoe().set_bit().dmam().mode_1());
+    // uart0.hsk.write(|w| w.hsk().handshake());
+    // uart0.dma_req_en.modify(|_r, w| w.timeout_enable().set_bit());
+    // uart0.fcr().write(|w| w.fifoe().set_bit().dmam().mode_1());
+    uart0.fcr().write(|w| {
+        w.fifoe().set_bit();
+        w.rt().half_full();
+        w
+    });
+    uart0.ier().write(|w| {
+        w.erbfi().set_bit();
+        w
+    });
 
     // TX Halted
     // Also has some DMA relevant things? Not set currently
@@ -146,65 +155,19 @@ fn main() -> ! {
     timer0.set_interrupt_en(true);
     timer1.set_interrupt_en(true);
     let plic = Plic::new(p.PLIC);
+
     unsafe {
+        plic.set_priority(Interrupt::UART0, Priority::P1);
         plic.set_priority(Interrupt::TIMER0, Priority::P1);
         plic.set_priority(Interrupt::TIMER1, Priority::P1);
+        plic.unmask(Interrupt::UART0);
         plic.unmask(Interrupt::TIMER0);
         plic.unmask(Interrupt::TIMER1);
     }
 
-    let data_buf = UnsafeCell::new([b'x'; 16]);
-
     let thr_addr = unsafe { &*UART0::PTR }.thr() as *const _ as *mut ();
-    let rhr_addr = unsafe { &*UART0::PTR }.rbr() as *const _ as *const ();
-
-    let rx_desc_base: Descriptor = DescriptorConfig {
-        source: rhr_addr,
-        destination: data_buf.get().cast(),
-        byte_counter: 16,
-        link: None,
-        wait_clock_cycles: 0,
-        bmode: BModeSel::Normal,
-        dest_width: DataWidth::Bit8,
-        dest_addr_mode: AddressMode::LinearMode,
-        dest_block_size: BlockSize::Byte1,
-        dest_drq_type: DestDrqType::Dram,
-        src_data_width: DataWidth::Bit8,
-        src_addr_mode: AddressMode::IoMode,
-        src_block_size: BlockSize::Byte1,
-        src_drq_type: SrcDrqType::Uart0Rx,
-    }.try_into().unwrap();
-
-    let mut rx_desc = None;
 
     for chunk in HOUND.lines() {
-        if rx_desc.is_some() {
-            // TODO: How to tell of DMA channel is done?
-            if unsafe { dmac.channels[1].en_reg() }.read().dma_en().bit_is_clear() {
-                fence(Ordering::SeqCst);
-                println!("USER INPUT: --------------");
-                println!("{:?}", rx_desc.take());
-                print_raw(unsafe {
-                    core::slice::from_raw_parts(
-                        data_buf.get().cast(),
-                        16,
-                    )
-                });
-                println!("\r\n--------------------------");
-            } else {
-                fence(Ordering::SeqCst);
-                println!("{:?}", &rx_desc);
-            }
-        }
-
-        if rx_desc.is_none() {
-            let desc = rx_desc.insert(rx_desc_base.clone());
-            unsafe {
-                dmac.channels[1].set_channel_modes(ChannelMode::Handshake, ChannelMode::Wait);
-                dmac.channels[1].start_descriptor(NonNull::from(desc));
-            }
-        }
-
         let d_cfg = DescriptorConfig {
             source: chunk.as_ptr().cast(),
             destination: thr_addr,
@@ -243,6 +206,7 @@ fn main() -> ! {
 fn im_an_interrupt() {
     let plic = unsafe { Plic::summon() };
     let timer = unsafe { &*TIMER::PTR };
+    let uart0 = unsafe { &*UART0::PTR };
 
     let claim = plic.claim();
     // println!("claim: {}", claim.bits());
@@ -261,6 +225,16 @@ fn im_an_interrupt() {
                 .modify(|_r, w| w.tmr1_irq_pend().set_bit());
             // Wait for the interrupt to clear to avoid repeat interrupts
             while timer.tmr_irq_sta.read().tmr1_irq_pend().bit_is_set() {}
+        }
+        Interrupt::UART0 => {
+            println!("");
+            println!("UART SAYS: ");
+            while uart0.usr.read().rfne().bit_is_set() {
+                let byte = uart0.rbr().read().rbr().bits();
+                uart0.thr().write(|w| unsafe { w.thr().bits(byte) });
+                while uart0.usr.read().tfnf().bit_is_clear() {}
+            }
+            println!("");
         }
         x => {
             println!("Unexpected claim: {:?}", x);
