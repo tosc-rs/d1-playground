@@ -96,7 +96,8 @@ fn main() -> ! {
     // DMA Mode 0 - (???)
     // FIFOs Enabled
     uart0.hsk.write(|w| w.hsk().handshake());
-    uart0.fcr().write(|w| w.fifoe().set_bit().dmam().mode_1().rt().quarter_full());
+    uart0.dma_req_en.modify(|_r, w| w.timeout_enable().set_bit());
+    uart0.fcr().write(|w| w.fifoe().set_bit().dmam().mode_1());
 
     // TX Halted
     // Also has some DMA relevant things? Not set currently
@@ -152,7 +153,7 @@ fn main() -> ! {
         plic.unmask(Interrupt::TIMER1);
     }
 
-    let data_buf = UnsafeCell::new([0u8; 16]);
+    let data_buf = UnsafeCell::new([b'x'; 16]);
 
     let thr_addr = unsafe { &*UART0::PTR }.thr() as *const _ as *mut ();
     let rhr_addr = unsafe { &*UART0::PTR }.rbr() as *const _ as *const ();
@@ -180,16 +181,19 @@ fn main() -> ! {
         if rx_desc.is_some() {
             // TODO: How to tell of DMA channel is done?
             if unsafe { dmac.channels[1].en_reg() }.read().dma_en().bit_is_clear() {
+                fence(Ordering::SeqCst);
                 println!("USER INPUT: --------------");
-                let _ = rx_desc.take();
+                println!("{:?}", rx_desc.take());
                 print_raw(unsafe {
-                    fence(Ordering::SeqCst);
                     core::slice::from_raw_parts(
                         data_buf.get().cast(),
                         16,
                     )
                 });
                 println!("\r\n--------------------------");
+            } else {
+                fence(Ordering::SeqCst);
+                println!("{:?}", &rx_desc);
             }
         }
 
